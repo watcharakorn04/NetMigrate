@@ -1,0 +1,6 @@
+{
+  "name": "NetMigrate",
+  "description": "A high-trust network CLI configuration translator and deployment management tool for Cisco IOS-XE and Huawei VRP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
