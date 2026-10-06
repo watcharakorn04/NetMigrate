@@ -339,10 +339,47 @@ export const INITIAL_DEVICES: Device[] = [
     sshPort: 22,
     credentialProfile: "NetDevOps Core Vault",
     isEveNg: true,
+    environmentType: "eveng",
     eveNodeId: 3,
+    eveServerUrl: "http://192.168.1.100",
+    eveLabName: "DC-Core-Migration.unl",
+    telnetPort: 32769,
+    qemuTemplate: "c1000v-universalk9-16.12",
     siteLocation: "BKK Data Center",
     networkRole: "Core",
-    status: "Online"
+    description: "Bangkok Primary Core Switch (Virtual Lab Node)",
+    status: "Online",
+    lastTestedAt: "2 mins ago",
+    latencyMs: 3,
+    baselineConfigUpdatedAt: "Oct 02, 2026 14:15",
+    baselineConfig: `! Cisco IOS-XE Baseline Running Config
+hostname SW-CORE-BKK-01
+!
+ip routing
+!
+vlan 10,20,30,99
+!
+interface Loopback0
+ description Management & Router ID
+ ip address 10.255.255.1 255.255.255.255
+ no shutdown
+!
+interface GigabitEthernet0/0/1
+ description Trunk to Dist-Switch-01
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30
+ no shutdown
+!
+router ospf 1
+ router-id 10.255.255.1
+ network 10.255.255.1 0.0.0.0 area 0
+ network 10.10.0.0 0.0.255.255 area 0
+!
+line vty 0 4
+ transport input ssh
+ login local
+!
+end`,
   },
   {
     id: "dev-002",
@@ -352,10 +389,43 @@ export const INITIAL_DEVICES: Device[] = [
     sshPort: 22,
     credentialProfile: "Regional Agg Vault",
     isEveNg: true,
+    environmentType: "eveng",
     eveNodeId: 5,
+    eveServerUrl: "http://192.168.1.100",
+    eveLabName: "DC-Core-Migration.unl",
+    telnetPort: 32771,
+    qemuTemplate: "huawei-vrp-ce6800-v8",
     siteLocation: "Phuket Campus Hub",
     networkRole: "Distribution",
-    status: "Online"
+    description: "Phuket Regional Aggregation Router (Virtual Lab Node)",
+    status: "Online",
+    lastTestedAt: "10 mins ago",
+    latencyMs: 12,
+    baselineConfigUpdatedAt: "Sep 28, 2026 11:30",
+    baselineConfig: `# Huawei VRP Baseline Running Config
+sysname SW-AGG-PHUKET-01
+#
+vlan batch 100 200
+#
+interface LoopBack0
+ description Management Loopback
+ ip address 10.254.254.1 255.255.255.255
+#
+interface GigabitEthernet0/0/1
+ description Link to Hypervisor Farm
+ port link-type trunk
+ port trunk allow-pass vlan 100 200
+ undo shutdown
+#
+ospf 1 router-id 10.254.254.1
+ area 0.0.0.0
+  network 10.254.254.1 0.0.0.0
+#
+user-interface vty 0 4
+ authentication-mode aaa
+ protocol inbound ssh
+#
+return`,
   },
   {
     id: "dev-003",
@@ -364,11 +434,16 @@ export const INITIAL_DEVICES: Device[] = [
     vendor: "cisco",
     sshPort: 22,
     credentialProfile: "Branch Perimeter Keys",
-    isEveNg: true,
-    eveNodeId: 8,
+    isEveNg: false,
+    environmentType: "physical",
+    rackUnit: "Rack B-02, U14",
+    serialNumber: "FCW2145A88X",
     siteLocation: "Chiang Mai Branch",
     networkRole: "Edge",
-    status: "Online"
+    description: "Chiang Mai Branch Perimeter Physical Gateway",
+    status: "Online",
+    lastTestedAt: "1 hour ago",
+    latencyMs: 24
   },
   {
     id: "dev-004",
@@ -378,9 +453,15 @@ export const INITIAL_DEVICES: Device[] = [
     sshPort: 2222,
     credentialProfile: "Factory OT Profile",
     isEveNg: false,
+    environmentType: "physical",
+    rackUnit: "Rack OT-1, U08",
+    serialNumber: "HW-S5720-9941K",
     siteLocation: "Rayong Plant OT",
     networkRole: "Access",
-    status: "Offline"
+    description: "Rayong Plant Industrial Access Switch (Physical)",
+    status: "Offline",
+    lastTestedAt: "Yesterday",
+    latencyMs: 0
   },
   {
     id: "dev-005",
@@ -390,10 +471,18 @@ export const INITIAL_DEVICES: Device[] = [
     sshPort: 22,
     credentialProfile: "Core Tier 1 SSH",
     isEveNg: true,
+    environmentType: "eveng",
     eveNodeId: 1,
+    eveServerUrl: "http://192.168.1.100",
+    eveLabName: "DC-Core-Migration.unl",
+    telnetPort: 32767,
+    qemuTemplate: "cisco-csr1000v",
     siteLocation: "BKK Data Center",
     networkRole: "Border",
-    status: "Online"
+    description: "BKK Internet Border Gateway (Virtual Lab)",
+    status: "Online",
+    lastTestedAt: "Just now",
+    latencyMs: 2
   }
 ];
 
@@ -409,9 +498,69 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     status: "SUCCESS",
     details: {
       fileCount: 3,
-      files: ["sw-core-bkk.cfg", "rt-branch-cnx.cfg", "dist-rack2.cfg"],
-      averageRuleCoverage: "88.4%",
-      notes: "Deterministic rules applied. 4 passwords and secret tokens withheld from plaintext export."
+      targetScope: "3 Payloads (sw-core-bkk, rt-branch, dist-rack)",
+      filename: "sw-core-bkk-01.txt",
+      executionTimeMs: 142,
+      averageRuleCoverage: "94.2%",
+      deterministicRulesApplied: 28,
+      aiAssistedLines: 4,
+      withheldCount: 4,
+      sourceSnippet: `! Cisco IOS-XE Source Configuration
+hostname SW-CORE-BKK-01
+!
+enable secret 9 $9$K1rZ2m... [MASKED SECRET]
+username admin privilege 15 secret 9 $9$8jX... [MASKED SECRET]
+!
+vlan 10,20,30,99
+!
+interface GigabitEthernet0/0/1
+ description Trunk Link to Aggregation
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+ no shutdown
+!
+interface Vlan10
+ description Corporate Data Gateway
+ ip address 10.10.10.1 255.255.255.0
+ no shutdown
+!
+router ospf 1
+ router-id 10.255.255.1
+ network 10.10.10.0 0.0.0.255 area 0
+!
+line vty 0 4
+ transport input ssh
+!
+end`,
+      targetSnippet: `# Huawei VRP Converted Target Configuration
+sysname SW-CORE-BKK-01
+#
+# [Security Guardrail] enable secret withheld for security
+# [Security Guardrail] username admin secret withheld
+#
+vlan batch 10 20 30 99
+#
+interface GigabitEthernet0/0/1
+ description Trunk Link to Aggregation
+ port link-type trunk
+ port trunk allow-pass vlan 10 20 30 99
+ undo shutdown
+#
+interface Vlanif10
+ description Corporate Data Gateway
+ ip address 10.10.10.1 255.255.255.0
+ undo shutdown
+#
+ospf 1 router-id 10.255.255.1
+ area 0.0.0.0
+  network 10.10.10.0 0.0.0.255
+#
+user-interface vty 0 4
+ authentication-mode aaa
+ protocol inbound ssh
+#
+return`,
+      notes: "Deterministic translation verified. Passwords and HMAC hashes withheld from plaintext export."
     }
   },
   {
@@ -419,20 +568,84 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     timestamp: "2026-10-02 13:15:22",
     username: "admin_user",
     action: "DEPLOY_EVENG",
-    sourceVendor: "huawei",
+    sourceVendor: "cisco",
     targetVendor: "huawei",
     maskedSecretsCount: 0,
     status: "SUCCESS",
     details: {
-      nodeId: 3,
+      targetScope: "SW-CORE-BKK-01",
       hostname: "SW-CORE-BKK-01",
+      managementIp: "192.168.10.1",
+      sshPort: 22,
+      environmentType: "eveng",
+      eveNodeId: 1,
+      eveLabName: "DC-Core-Migration.unl",
       commitStatus: "COMMITTED",
-      linesExecuted: 38,
-      withheldCount: 4
+      linesExecuted: 32,
+      withheldCount: 2,
+      payloadSnippet: `# Huawei VRP Executable Script
+sysname SW-CORE-BKK-01
+vlan batch 10 20 30 99
+interface GigabitEthernet0/0/1
+ description Uplink to Spine
+ port link-type trunk
+ port trunk allow-pass vlan 10 20 30 99
+ undo shutdown
+interface Vlanif10
+ description Management Gateway
+ ip address 192.168.10.1 255.255.255.0
+ undo shutdown
+return`,
+      rollbackSnippet: `# Compensating Rollback Commands
+sysname Device_Default
+undo vlan batch 10 20 30 99
+interface GigabitEthernet0/0/1
+ undo port trunk allow-pass vlan 10 20 30 99
+ port link-type access
+interface Vlanif10
+ undo ip address
+ shutdown
+return`,
+      terminalLogs: [
+        { timestamp: "13:15:22", severity: "INFO", message: "Connecting to EVE-NG virtual node ID #1 at 192.168.10.1:22..." },
+        { timestamp: "13:15:23", severity: "SUCCESS", message: "SSH handshake and RSA host key verified successfully." },
+        { timestamp: "13:15:23", severity: "COMMAND", message: "> system-view" },
+        { timestamp: "13:15:24", severity: "COMMAND", message: "> sysname SW-CORE-BKK-01" },
+        { timestamp: "13:15:24", severity: "COMMAND", message: "> vlan batch 10 20 30 99" },
+        { timestamp: "13:15:25", severity: "COMMAND", message: "> interface GigabitEthernet0/0/1" },
+        { timestamp: "13:15:25", severity: "COMMAND", message: "> port link-type trunk" },
+        { timestamp: "13:15:26", severity: "COMMAND", message: "> port trunk allow-pass vlan 10 20 30 99" },
+        { timestamp: "13:15:27", severity: "SUCCESS", message: "Configuration committed into VRP candidate configuration." },
+        { timestamp: "13:15:28", severity: "SUCCESS", message: "All 32 statements executed. Exit code: 0 OK." }
+      ]
     }
   },
   {
     id: "log-103",
+    timestamp: "2026-10-02 11:05:18",
+    username: "net_architect",
+    action: "EDIT_DEVICE",
+    sourceVendor: "cisco",
+    targetVendor: "-",
+    maskedSecretsCount: 0,
+    status: "SUCCESS",
+    details: {
+      targetScope: "SW-CORE-BKK-01",
+      deviceId: "dev-001",
+      hostname: "SW-CORE-BKK-01",
+      environmentType: "eveng",
+      vendor: "cisco",
+      diff: [
+        { property: "Management IP", previous: "192.168.10.254", updated: "192.168.10.1" },
+        { property: "SSH Port", previous: "2222", updated: "22" },
+        { property: "Network Role", previous: "Distribution", updated: "Core" },
+        { property: "EVE-NG Node ID", previous: "2", updated: "1" }
+      ],
+      notes: "Updated device address schema and reassigned node to primary core role."
+    }
+  },
+  {
+    id: "log-104",
     timestamp: "2026-10-01 17:40:10",
     username: "audit_bot",
     action: "GENERATE_ROLLBACK",
@@ -441,12 +654,67 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     maskedSecretsCount: 1,
     status: "SUCCESS",
     details: {
-      rollbackCommandsGenerated: 14,
-      targetPlatform: "Huawei VRP v8"
+      targetScope: "RT-BRANCH-CNX-01",
+      filename: "rt-branch-cnx-01.txt",
+      rollbackCommandsGenerated: 16,
+      targetPlatform: "Huawei VRP v8",
+      targetSnippet: `# Auto-generated Rollback Script for RT-BRANCH-CNX-01
+sysname Branch_Old
+undo interface LoopBack0
+undo ospf 1
+interface GigabitEthernet0/0/1
+ undo ip address
+ shutdown
+return`
     }
   },
   {
-    id: "log-104",
+    id: "log-105",
+    timestamp: "2026-10-01 14:10:05",
+    username: "admin_user",
+    action: "DEPLOY_DRY_RUN",
+    sourceVendor: "cisco",
+    targetVendor: "huawei",
+    maskedSecretsCount: 0,
+    status: "SUCCESS",
+    details: {
+      targetScope: "SW-AGG-PHUKET-01",
+      hostname: "SW-AGG-PHUKET-01",
+      managementIp: "192.168.20.1",
+      environmentType: "eveng",
+      eveNodeId: 2,
+      dryRun: true,
+      syntaxVerified: true,
+      linesSimulated: 24,
+      payloadSnippet: `# Huawei VRP Executable Script
+sysname SW-AGG-PHUKET-01
+vlan batch 100 200
+interface LoopBack0
+ description Management Loopback
+ ip address 10.254.254.1 255.255.255.255
+interface GigabitEthernet0/0/1
+ description Link to Hypervisor Farm
+ port link-type trunk
+ port trunk allow-pass vlan 100 200
+ undo shutdown
+return`,
+      rollbackSnippet: `# Compensating Rollback Commands
+sysname Device_Default
+undo vlan batch 100 200
+undo interface LoopBack0
+interface GigabitEthernet0/0/1
+ undo port trunk allow-pass vlan 100 200
+ port link-type access
+return`,
+      terminalLogs: [
+        { timestamp: "14:10:05", severity: "INFO", message: "Starting dry-run syntax verification on node SW-AGG-PHUKET-01..." },
+        { timestamp: "14:10:06", severity: "INFO", message: "Validating VLAN batch syntax against VRP v8 parser..." },
+        { timestamp: "14:10:07", severity: "SUCCESS", message: "Dry-run syntax passed without errors. Configuration not committed to hardware." }
+      ]
+    }
+  },
+  {
+    id: "log-106",
     timestamp: "2026-10-01 09:20:45",
     username: "net_architect",
     action: "ADD_DEVICE",
@@ -455,9 +723,38 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     maskedSecretsCount: 0,
     status: "SUCCESS",
     details: {
-      deviceId: "dev-001",
-      hostname: "SW-CORE-BKK-01",
-      eveNodeId: 3
+      targetScope: "RT-BRANCH-CNX-01",
+      deviceId: "dev-003",
+      hostname: "RT-BRANCH-CNX-01",
+      managementIp: "10.50.1.1",
+      vendor: "cisco",
+      sshPort: 22,
+      environmentType: "physical",
+      rackUnit: "Rack B-02, U14",
+      serialNumber: "FCW2145A88X",
+      siteLocation: "Chiang Mai Branch",
+      networkRole: "Edge",
+      description: "Chiang Mai Branch Perimeter Physical Gateway"
+    }
+  },
+  {
+    id: "log-107",
+    timestamp: "2026-09-30 18:00:12",
+    username: "sec_compliance",
+    action: "DELETE_DEVICE",
+    sourceVendor: "huawei",
+    targetVendor: "-",
+    maskedSecretsCount: 0,
+    status: "WARNING",
+    details: {
+      targetScope: "SW-DECOMMISSION-09",
+      deviceId: "dev-099",
+      hostname: "SW-DECOMMISSION-09",
+      managementIp: "172.16.99.1",
+      vendor: "huawei",
+      environmentType: "physical",
+      siteLocation: "Legacy DC Zone C",
+      notes: "Decommissioned hardware purged from active inventory per Q3 review."
     }
   }
 ];
@@ -617,7 +914,7 @@ export const SUPPORTED_RULES: CommandRule[] = [
     id: "LAG-01",
     category: "Link Aggregation",
     ciscoSyntax: "channel-group <ID> mode active",
-    huaweiSyntax: "eth-trunk <ID> \\n mode lacp-static",
+    huaweiSyntax: "eth-trunk <ID>\n mode lacp-static",
     direction: "bidirectional",
     provenance: "R",
     description: "Binds physical interface into 802.3ad dynamic LACP bundle.",
@@ -631,7 +928,7 @@ export const SUPPORTED_RULES: CommandRule[] = [
     direction: "bidirectional",
     provenance: "R",
     description: "Installs static routing entry into FIB.",
-    notes: "Direct keyword syntax swap 'ip route' vs 'ip route-static'."
+    notes: "Direct keyword swap 'ip route' vs 'ip route-static'."
   },
   {
     id: "OSPF-01",
@@ -647,7 +944,7 @@ export const SUPPORTED_RULES: CommandRule[] = [
     id: "OSPF-02",
     category: "Routing (OSPF/BGP/Static)",
     ciscoSyntax: "network <IP> <WILDCARD> area <AREA>",
-    huaweiSyntax: "area <AREA> \\n network <IP> <WILDCARD>",
+    huaweiSyntax: "area <AREA>\n network <IP> <WILDCARD>",
     direction: "bidirectional",
     provenance: "R",
     description: "Advertises interface subnets into designated OSPF area.",

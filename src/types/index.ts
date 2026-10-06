@@ -32,6 +32,7 @@ export interface ConfigConversion {
   maskedSecretsCount: number;
   needsReviewCount: number;
   fileSize?: string;
+  aiAssistEnabled?: boolean;
 }
 
 export interface Device {
@@ -45,14 +46,38 @@ export interface Device {
   eveNodeId?: number;
   siteLocation: string;
   networkRole: 'Core' | 'Distribution' | 'Access' | 'Edge' | 'Border' | 'Firewall';
-  status: 'Online' | 'Offline' | 'Deploying';
+  status: 'Online' | 'Offline' | 'Deploying' | 'Unreachable';
+  environmentType?: 'physical' | 'eveng';
+  description?: string;
+  rackUnit?: string;
+  serialNumber?: string;
+  eveServerUrl?: string;
+  eveLabName?: string;
+  telnetPort?: number;
+  qemuTemplate?: string;
+  lastTestedAt?: string;
+  latencyMs?: number;
+  baselineConfig?: string;
+  baselineConfigUpdatedAt?: string;
 }
 
 export interface AuditLog {
   id: string;
   timestamp: string;
   username: string;
-  action: 'CONVERT_SINGLE' | 'CONVERT_BATCH' | 'DEPLOY_EVENG' | 'GENERATE_ROLLBACK' | 'ADD_DEVICE' | 'EDIT_DEVICE' | 'DELETE_DEVICE' | 'EXPORT_CLEAN_CLI';
+  action:
+    | 'CONVERT_SINGLE'
+    | 'CONVERT_BATCH'
+    | 'SEND_TO_DEPLOY'
+    | 'DEPLOY_EVENG'
+    | 'DEPLOY_DRY_RUN'
+    | 'DEPLOY_PUSH'
+    | 'GENERATE_ROLLBACK'
+    | 'ADD_DEVICE'
+    | 'EDIT_DEVICE'
+    | 'DELETE_DEVICE'
+    | 'EXPORT_CLEAN_CLI'
+    | string;
   sourceVendor?: Vendor | string;
   targetVendor?: Vendor | string;
   maskedSecretsCount: number;

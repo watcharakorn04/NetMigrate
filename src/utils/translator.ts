@@ -32,7 +32,8 @@ export function translateConfig(
   sourceText: string,
   fromVendor: Vendor,
   toVendor: Vendor,
-  filename = "config_translated.cfg"
+  filename = "config_translated.txt",
+  enableAiAssist = true
 ): ConfigConversion {
   const rawLines = sourceText.split(/\r?\n/);
   const translatedLines: TranslatedLine[] = [];
@@ -187,16 +188,29 @@ export function translateConfig(
       }
 
       if (/^spanning-tree portfast default/i.test(trimmed)) {
-        needsReviewCount++;
-        aiMatches++;
-        translatedLines.push({
-          lineNum,
-          source: rawLine,
-          target: "# AI: Verify global edged-port defaults across switch model (stp edged-port default)",
-          provenance: 'A',
-          needsReview: true,
-          note: "Huawei enables edge port per interface or via global stp edged-port command.",
-        });
+        if (enableAiAssist) {
+          needsReviewCount++;
+          aiMatches++;
+          translatedLines.push({
+            lineNum,
+            source: rawLine,
+            target: "# AI: Verify global edged-port defaults across switch model (stp edged-port default)",
+            provenance: 'A',
+            needsReview: true,
+            note: "Huawei enables edge port per interface or via global stp edged-port command.",
+          });
+        } else {
+          needsReviewCount++;
+          unmappedMatches++;
+          translatedLines.push({
+            lineNum,
+            source: rawLine,
+            target: "# [UNMAPPED - FAST ENGINE] Cisco command: spanning-tree portfast default",
+            provenance: 'U',
+            needsReview: true,
+            note: "Fast Rule Engine mode active (AI Assist disabled). Command requires manual review or deterministic rule.",
+          });
+        }
         continue;
       }
 
@@ -553,9 +567,9 @@ export function translateConfig(
         continue;
       }
 
-      // Fallback AI heuristic suggestion
+      // Fallback AI heuristic suggestion vs Fast Rule Engine
       if (trimmed.length > 3) {
-        if (/policy-map|class-map|crypto|ip access-list/i.test(trimmed)) {
+        if (enableAiAssist && /policy-map|class-map|crypto|ip access-list/i.test(trimmed)) {
           needsReviewCount++;
           aiMatches++;
           translatedLines.push({
@@ -572,10 +586,14 @@ export function translateConfig(
           translatedLines.push({
             lineNum,
             source: rawLine,
-            target: `# [UNMAPPED] Cisco command requiring manual verification: ${trimmed}`,
+            target: enableAiAssist
+              ? `# [UNMAPPED] Cisco command requiring manual verification: ${trimmed}`
+              : `# [UNMAPPED - FAST ENGINE] Cisco command: ${trimmed}`,
             provenance: 'U',
             needsReview: true,
-            note: "No direct deterministic translation rule found.",
+            note: enableAiAssist
+              ? "No direct deterministic translation rule found."
+              : "Fast Rule Engine: pure deterministic translation (AI Assist disabled).",
           });
         }
         continue;
@@ -874,9 +892,9 @@ export function translateConfig(
         continue;
       }
 
-      // AI or Unmapped for Huawei
+      // AI or Unmapped for Huawei vs Fast Rule Engine
       if (trimmed.length > 3) {
-        if (/traffic-policy|traffic-classifier|acl number/i.test(trimmed)) {
+        if (enableAiAssist && /traffic-policy|traffic-classifier|acl number/i.test(trimmed)) {
           needsReviewCount++;
           aiMatches++;
           translatedLines.push({
@@ -893,10 +911,14 @@ export function translateConfig(
           translatedLines.push({
             lineNum,
             source: rawLine,
-            target: `! [UNMAPPED] Huawei command requiring manual verification: ${trimmed}`,
+            target: enableAiAssist
+              ? `! [UNMAPPED] Huawei command requiring manual verification: ${trimmed}`
+              : `! [UNMAPPED - FAST ENGINE] Huawei command: ${trimmed}`,
             provenance: 'U',
             needsReview: true,
-            note: "No direct deterministic translation rule found.",
+            note: enableAiAssist
+              ? "No direct deterministic translation rule found."
+              : "Fast Rule Engine: pure deterministic translation (AI Assist disabled).",
           });
         }
         continue;
@@ -945,6 +967,7 @@ export function translateConfig(
     maskedSecretsCount,
     needsReviewCount,
     fileSize: `${(sourceText.length / 1024).toFixed(1)} KB`,
+    aiAssistEnabled: enableAiAssist,
   };
 }
 

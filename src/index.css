@@ -81,3 +81,24 @@ code, pre, .font-mono {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
 }
+
+/* High-contrast dropdown styling for native select and option elements */
+select {
+  color-scheme: light;
+}
+
+.dark select,
+html.dark select {
+  color-scheme: dark !important;
+}
+
+select option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+.dark select option,
+html.dark select option {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}

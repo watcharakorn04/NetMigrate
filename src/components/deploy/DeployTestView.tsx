@@ -27,93 +27,133 @@ import {
   AlertCircle,
   ArrowRight,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Upload,
+  X,
+  FileText,
+  Plus
 } from 'lucide-react';
 import { ConfigConversion, Device, Language, LogSeverity, TerminalLogEntry, WithheldLine } from '../../types';
 import { translations } from '../../locales/translations';
-import { extractWithheldLines } from '../../utils/translator';
+import { detectVendor, translateConfig, extractWithheldLines } from '../../utils/translator';
 
 interface DeployTestViewProps {
   devices: Device[];
-  activeConversion: ConfigConversion;
+  deployPayloads?: ConfigConversion[];
+  activeDeployPayloadId?: string;
+  onSelectDeployPayload?: (id: string) => void;
+  onAddDeployPayloads?: (newPayloads: ConfigConversion[]) => void;
+  onDeleteDeployPayload?: (id: string) => void;
+  activeConversion?: ConfigConversion;
   conversions?: ConfigConversion[];
   activeConversionId?: string;
   onSelectConversion?: (id: string) => void;
+  onAddConversions?: (newConversions: ConfigConversion[]) => void;
+  onDeleteConversion?: (id: string) => void;
   language: Language;
   onRecordAudit: (action: string, details: Record<string, unknown>, maskedCount: number) => void;
 }
 
 export type BatchFileStatus = 'idle' | 'pending' | 'simulating' | 'deploying' | 'deployed' | 'dry-run-ok' | 'skipped' | 'failed';
 
-// Helper to extract hostname from conversion CLI and filename
+// Helper to extract hostname from conversion CLI and filename (for metadata display only)
 function parseHostnameFromConversion(conversion: ConfigConversion): string {
   const cliText = `${conversion.cleanCli}\n${conversion.originalSource}`;
-  // Look for sysname or hostname command
   const match = cliText.match(/^\s*(?:sysname|hostname)\s+([A-Za-z0-9_-]+)/im);
   if (match && match[1]) {
     return match[1].trim();
   }
-  // Fallback: strip file extension
   return conversion.filename.replace(/\.[^/.]+$/, '').trim();
-}
-
-// Helper to find matching device from inventory
-function findMatchingDevice(
-  parsedHostname: string,
-  devices: Device[]
-): { device: Device | null; matchType: 'exact' | 'normalized' | 'none' } {
-  if (!parsedHostname || !devices.length) {
-    return { device: null, matchType: 'none' };
-  }
-
-  const cleanTarget = parsedHostname.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-  // 1. Exact match (case-insensitive)
-  const exact = devices.find(d => d.hostname.toLowerCase() === parsedHostname.toLowerCase());
-  if (exact) return { device: exact, matchType: 'exact' };
-
-  // 2. Normalized prefix/alphanumeric match (e.g. SW-CORE-BKK matching SW-CORE-BKK-01)
-  const normalized = devices.find(d => {
-    const devNorm = d.hostname.toLowerCase().replace(/[^a-z0-9]/g, '');
-    return devNorm === cleanTarget || devNorm.startsWith(cleanTarget) || cleanTarget.startsWith(devNorm);
-  });
-  if (normalized) return { device: normalized, matchType: 'normalized' };
-
-  return { device: null, matchType: 'none' };
 }
 
 export const DeployTestView: React.FC<DeployTestViewProps> = ({
   devices,
+  deployPayloads: propDeployPayloads,
+  activeDeployPayloadId: propActiveDeployPayloadId,
+  onSelectDeployPayload: propOnSelectDeployPayload,
+  onAddDeployPayloads: propOnAddDeployPayloads,
+  onDeleteDeployPayload: propOnDeleteDeployPayload,
   activeConversion,
-  conversions = [activeConversion],
-  activeConversionId = activeConversion.id,
+  conversions: initialConversions,
+  activeConversionId: initialActiveId,
   onSelectConversion,
+  onAddConversions,
+  onDeleteConversion,
   language,
   onRecordAudit,
 }) => {
   const t = translations[language];
 
-  // Current active conversion
-  const currentConversion = conversions.find(c => c.id === activeConversionId) || activeConversion;
-  const currentConversionIndex = conversions.findIndex(c => c.id === currentConversion.id);
-  const totalConversions = conversions.length;
+  // EXPLICIT PAYLOAD INGESTION (No Auto-Flow):
+  // Deploy console starts as a clean slate by default (empty queue).
+  // Converted scripts from the workspace tab do not automatically clutter the deploy queue.
+  // Operators explicitly upload deployment payloads via the "Upload Payload Files (.txt)" button or empty dropzone.
+  const [internalPayloads, setInternalPayloads] = useState<ConfigConversion[]>([]);
+  const [internalActiveId, setInternalActiveId] = useState<string>('');
 
-  // Parsed Hostname from active payload
-  const parsedHostname = parseHostnameFromConversion(currentConversion);
+  const isControlled = propDeployPayloads !== undefined;
+  const deployPayloads = isControlled ? propDeployPayloads : internalPayloads;
+  const activeDeployPayloadId = isControlled
+    ? (propActiveDeployPayloadId || (deployPayloads[0]?.id || ''))
+    : internalActiveId;
 
-  // Auto-matching result for current payload
-  const autoMatchResult = findMatchingDevice(parsedHostname, devices);
+  const setActiveDeployPayloadId = (id: string) => {
+    if (isControlled && propOnSelectDeployPayload) {
+      propOnSelectDeployPayload(id);
+    } else {
+      setInternalActiveId(id);
+    }
+  };
 
-  // Manual device selection override map per conversion ID
-  const [deviceOverrides, setDeviceOverrides] = useState<Record<string, string>>({});
-  
-  // Resolve effective device ID
-  const isManuallyOverridden = Object.prototype.hasOwnProperty.call(deviceOverrides, currentConversion.id);
-  const effectiveDeviceId = isManuallyOverridden
-    ? deviceOverrides[currentConversion.id]
-    : (autoMatchResult.device ? autoMatchResult.device.id : '');
+  const handleAddDeployPayloads = (newPayloads: ConfigConversion[]) => {
+    if (isControlled && propOnAddDeployPayloads) {
+      propOnAddDeployPayloads(newPayloads);
+    } else {
+      setInternalPayloads((prev) => [...prev, ...newPayloads]);
+      if (newPayloads.length > 0) {
+        setInternalActiveId(newPayloads[0].id);
+      }
+    }
+  };
 
-  const selectedDevice = devices.find(d => d.id === effectiveDeviceId) || null;
+  const handleDeleteDeployPayload = (idToDelete: string) => {
+    if (isControlled && propOnDeleteDeployPayload) {
+      propOnDeleteDeployPayload(idToDelete);
+    } else {
+      setInternalPayloads((prev) => {
+        const next = prev.filter((p) => p.id !== idToDelete);
+        if (internalActiveId === idToDelete) {
+          setInternalActiveId(next.length > 0 ? next[0].id : '');
+        }
+        return next;
+      });
+    }
+  };
+
+  const currentConversion = deployPayloads.find((c) => c.id === activeDeployPayloadId) || deployPayloads[0] || null;
+  const currentConversionIndex = currentConversion ? deployPayloads.findIndex((c) => c.id === currentConversion.id) : -1;
+  const totalConversions = deployPayloads.length;
+
+  // Direct Upload Drag & Drop ref and state
+  const fileUploadInputRef = useRef<HTMLInputElement>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+
+  // Dual-Tab Payload Ingestion Modal State
+  const [isIngestModalOpen, setIsIngestModalOpen] = useState(false);
+  const [ingestModalTab, setIngestModalTab] = useState<'upload' | 'paste'>('upload');
+  const [modalRefName, setModalRefName] = useState('');
+  const [modalPasteCli, setModalPasteCli] = useState('');
+  const [modalStagedFiles, setModalStagedFiles] = useState<{ file: File; text: string; linesCount: number }[]>([]);
+  const [isModalDragging, setIsModalDragging] = useState(false);
+  const modalFileInputRef = useRef<HTMLInputElement>(null);
+
+  // STRICT MANUAL TARGET SELECTION (Zero auto-matching):
+  // Every file defaults to unselected ("") with [Unmapped] status.
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Record<string, string>>({});
+
+  // Effective device explicitly chosen for current conversion
+  const effectiveDeviceId = (currentConversion && selectedDeviceIds[currentConversion.id]) || '';
+  const selectedDevice = devices.find((d) => d.id === effectiveDeviceId) || null;
 
   // Left panel view tab: 'preview' (Target CLI code) vs 'withheld' (Guardrails)
   const [leftTab, setLeftTab] = useState<'preview' | 'withheld'>('preview');
@@ -122,18 +162,18 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
   const [copiedCli, setCopiedCli] = useState(false);
 
   // Logs state
-  const [logs, setLogs] = useState<TerminalLogEntry[]>([
+  const [logs, setLogs] = useState<TerminalLogEntry[]>(() => [
     {
       id: 'log-init-1',
       timestamp: new Date().toLocaleTimeString(),
       severity: 'INFO',
-      message: 'NetMigrate EVE-NG deployment worker ready. Target matching engine active.',
+      message: 'NetMigrate EVE-NG deployment worker ready. Strict manual target safety policy enforced.',
     },
     {
       id: 'log-init-2',
       timestamp: new Date().toLocaleTimeString(),
       severity: 'INFO',
-      message: `Active payload: ${currentConversion.filename} (${currentConversion.targetVendor.toUpperCase()} target). Parsed hostname: "${parsedHostname}".`,
+      message: 'Deployment workspace ready. Upload target .txt scripts to begin simulation or execution.',
     },
   ]);
 
@@ -144,13 +184,7 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
   const [deploymentStatus, setDeploymentStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
 
   // Batch execution status tracker
-  const [batchStatuses, setBatchStatuses] = useState<Record<string, BatchFileStatus>>(() => {
-    const initial: Record<string, BatchFileStatus> = {};
-    conversions.forEach(c => {
-      initial[c.id] = 'idle';
-    });
-    return initial;
-  });
+  const [batchStatuses, setBatchStatuses] = useState<Record<string, BatchFileStatus>>({});
 
   // Terminal options
   const [autoScroll, setAutoScroll] = useState(true);
@@ -158,7 +192,7 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
   const terminalRef = useRef<HTMLDivElement>(null);
 
   // Withheld lines calculation for current payload
-  const withheldLines: WithheldLine[] = extractWithheldLines(currentConversion.lines);
+  const withheldLines: WithheldLine[] = currentConversion ? extractWithheldLines(currentConversion.lines) : [];
 
   // Auto-scroll effect
   useEffect(() => {
@@ -166,6 +200,20 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [logs, autoScroll]);
+
+  // Add a single log entry
+  const appendLog = (severity: 'INFO' | 'SUCCESS' | 'WARNING' | 'ERROR' | 'COMMAND', message: string, nodeId?: number) => {
+    setLogs((prev) => [
+      ...prev,
+      {
+        id: `log-${Date.now()}-${Math.random()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        severity,
+        message,
+        nodeId,
+      },
+    ]);
+  };
 
   // Copy converted CLI to clipboard
   const handleCopyCli = () => {
@@ -188,63 +236,255 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `deployment_log_${selectedDevice?.hostname || parsedHostname || 'lab'}_${Date.now()}.log`;
-    document.body.appendChild(a);
+    a.download = `deployment_terminal_${Date.now()}.log`;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // Add a single log entry
-  const appendLog = (severity: 'INFO' | 'SUCCESS' | 'WARNING' | 'ERROR' | 'COMMAND', message: string, nodeId?: number) => {
-    setLogs((prev) => [
-      ...prev,
+  // DIRECT PAYLOAD FILE INGESTION (Upload .txt CLI files directly into Deploy Console)
+  const handleDirectUploadFiles = async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+
+    const newConversions: ConfigConversion[] = [];
+    for (const file of fileList) {
+      const text = await file.text();
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      const filename = `${baseName}.txt`;
+      const detected = detectVendor(text);
+      const targetVendor = detected === 'huawei' || text.includes('sysname') || text.includes('port link-type') || text.includes('return')
+        ? 'huawei'
+        : 'cisco';
+      const sourceVendor = targetVendor === 'huawei' ? 'cisco' : 'huawei';
+
+      const conv = translateConfig(text, sourceVendor, targetVendor, filename, false);
+      newConversions.push(conv);
+    }
+
+    handleAddDeployPayloads(newConversions);
+    if (newConversions.length > 0) {
+      setActiveDeployPayloadId(newConversions[0].id);
+    }
+
+    // Default all newly ingested files to unmapped
+    setSelectedDeviceIds((prev) => {
+      const next = { ...prev };
+      newConversions.forEach((c) => {
+        next[c.id] = '';
+      });
+      return next;
+    });
+
+    setBatchStatuses((prev) => {
+      const next = { ...prev };
+      newConversions.forEach((c) => {
+        next[c.id] = 'idle';
+      });
+      return next;
+    });
+
+    appendLog(
+      'SUCCESS',
+      `📥 Ingested ${newConversions.length} deployment payload ${newConversions.length === 1 ? 'file' : 'files'}: ${newConversions.map((c) => c.filename).join(', ')}. Target devices defaulted to [Unmapped] for safety.`
+    );
+
+    onRecordAudit(
+      newConversions.length > 1 ? 'CONVERT_BATCH' : 'CONVERT_SINGLE',
       {
-        id: `log-${Date.now()}-${Math.random()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        severity,
-        message,
-        nodeId,
+        fileCount: newConversions.length,
+        files: newConversions.map((c) => c.filename),
+        source: 'DEPLOY_DIRECT_UPLOAD',
       },
-    ]);
+      0
+    );
   };
 
-  // Handle manual device override selection
+  // Stage files in the Dual-Tab Modal
+  const handleStageFiles = async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+    const staged: { file: File; text: string; linesCount: number }[] = [];
+    for (const f of fileList) {
+      const text = await f.text();
+      const linesCount = text.split('\n').filter(Boolean).length;
+      staged.push({ file: f, text, linesCount });
+    }
+    setModalStagedFiles((prev) => [...prev, ...staged]);
+  };
+
+  // Commit staged files from modal into deployment queue
+  const handleCommitStagedFiles = () => {
+    if (modalStagedFiles.length === 0) return;
+    const newConvs: ConfigConversion[] = modalStagedFiles.map((item) => {
+      const baseName = item.file.name.replace(/\.[^/.]+$/, '');
+      const filename = `${baseName}.txt`;
+      const detected = detectVendor(item.text);
+      const targetVendor = detected === 'huawei' || item.text.includes('sysname') || item.text.includes('port link-type') || item.text.includes('return')
+        ? 'huawei'
+        : 'cisco';
+      const sourceVendor = targetVendor === 'huawei' ? 'cisco' : 'huawei';
+      return translateConfig(item.text, sourceVendor, targetVendor, filename, false);
+    });
+
+    handleAddDeployPayloads(newConvs);
+    if (newConvs.length > 0) {
+      setActiveDeployPayloadId(newConvs[0].id);
+    }
+
+    setSelectedDeviceIds((prev) => {
+      const next = { ...prev };
+      newConvs.forEach((c) => { next[c.id] = ''; });
+      return next;
+    });
+
+    setBatchStatuses((prev) => {
+      const next = { ...prev };
+      newConvs.forEach((c) => { next[c.id] = 'idle'; });
+      return next;
+    });
+
+    appendLog(
+      'SUCCESS',
+      `📥 Ingested ${newConvs.length} deployment payload ${newConvs.length === 1 ? 'file' : 'files'}: ${newConvs.map((c) => c.filename).join(', ')}. Target devices defaulted to [Unmapped] for safety.`
+    );
+
+    onRecordAudit(
+      newConvs.length > 1 ? 'CONVERT_BATCH' : 'CONVERT_SINGLE',
+      {
+        fileCount: newConvs.length,
+        files: newConvs.map((c) => c.filename),
+        source: 'DEPLOY_MODAL_UPLOAD',
+      },
+      0
+    );
+
+    setModalStagedFiles([]);
+    setIsIngestModalOpen(false);
+  };
+
+  // Commit pasted CLI snippet from modal into deployment queue
+  const handleCommitPasteCli = () => {
+    if (!modalPasteCli.trim()) return;
+    const cleanRef = modalRefName.trim().replace(/\.[^/.]+$/, '') || `patch-${Date.now().toString().slice(-4)}`;
+    const filename = `${cleanRef}.txt`;
+    const detected = detectVendor(modalPasteCli);
+    const targetVendor = detected === 'huawei' || modalPasteCli.includes('sysname') || modalPasteCli.includes('port link-type') || modalPasteCli.includes('return')
+      ? 'huawei'
+      : 'cisco';
+    const sourceVendor = targetVendor === 'huawei' ? 'cisco' : 'huawei';
+
+    const conv = translateConfig(modalPasteCli, sourceVendor, targetVendor, filename, false);
+    handleAddDeployPayloads([conv]);
+    setActiveDeployPayloadId(conv.id);
+
+    setSelectedDeviceIds((prev) => ({ ...prev, [conv.id]: '' }));
+    setBatchStatuses((prev) => ({ ...prev, [conv.id]: 'idle' }));
+
+    appendLog(
+      'SUCCESS',
+      `📥 Ingested pasted CLI snippet "${filename}" (${conv.lines.length} statements). Target device defaulted to [Unmapped] for safety.`
+    );
+
+    onRecordAudit(
+      'CONVERT_SINGLE',
+      {
+        filename,
+        source: 'DEPLOY_MODAL_PASTE',
+        lineCount: conv.lines.length,
+      },
+      0
+    );
+
+    setModalRefName('');
+    setModalPasteCli('');
+    setIsIngestModalOpen(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDraggingFile(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    if (e.dataTransfer.files) {
+      handleDirectUploadFiles(e.dataTransfer.files);
+    }
+  };
+
+  // Handle explicit manual device selection
   const handleDeviceSelect = (devId: string) => {
-    setDeviceOverrides(prev => ({
+    if (!currentConversion) return;
+
+    setSelectedDeviceIds((prev) => ({
       ...prev,
       [currentConversion.id]: devId,
     }));
-    const newDev = devices.find(d => d.id === devId);
+
+    const newDev = devices.find((d) => d.id === devId);
     if (newDev) {
-      appendLog('INFO', `Operator manually assigned target device: ${newDev.hostname} (${newDev.managementIp}) for ${currentConversion.filename}`);
+      appendLog(
+        'INFO',
+        `🎯 Target device explicitly assigned: ${newDev.hostname} (${newDev.managementIp}) for payload "${currentConversion.filename}". Safety lock disengaged.`
+      );
     } else {
-      appendLog('WARNING', `Target device unmapped for payload ${currentConversion.filename}. Safety lock engaged.`);
+      appendLog(
+        'WARNING',
+        `⚠️ Target device set to Unmapped for payload "${currentConversion.filename}". Safety lock re-engaged.`
+      );
     }
   };
 
   // Switch payload
   const handleSwitchPayload = (convId: string) => {
-    if (onSelectConversion) {
-      onSelectConversion(convId);
-    }
-    const targetConv = conversions.find(c => c.id === convId);
+    setActiveDeployPayloadId(convId);
+    const targetConv = deployPayloads.find((c) => c.id === convId);
     if (targetConv) {
-      const pHost = parseHostnameFromConversion(targetConv);
-      const match = findMatchingDevice(pHost, devices);
-      appendLog('INFO', `Switched active payload to ${targetConv.filename}. Target hostname: "${pHost}" ${match.device ? `[Auto-Matched to ${match.device.hostname}]` : '[Unmapped]'}`);
+      const assignedDevId = selectedDeviceIds[targetConv.id];
+      const assignedDev = assignedDevId ? devices.find((d) => d.id === assignedDevId) : null;
+      appendLog(
+        'INFO',
+        `Switched active payload to "${targetConv.filename}" (${targetConv.cleanCli.split('\n').filter(Boolean).length} statements). Destination mapping: ${
+          assignedDev ? `Mapped to ${assignedDev.hostname} (${assignedDev.managementIp})` : '[Unmapped - Device Selection Required]'
+        }`
+      );
     }
+  };
+
+  // Delete individual payload from deployment queue
+  const handleDeletePayload = (convId: string, filename: string) => {
+    handleDeleteDeployPayload(convId);
+
+    // Clean up mapping and batch status for this ID
+    setSelectedDeviceIds((prev) => {
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+
+    setBatchStatuses((prev) => {
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+
+    appendLog('INFO', `🗑️ Removed payload "${filename}" from deployment queue.`);
   };
 
   // Run deployment sequence for single payload
   const runExecution = async (dryRun: boolean, targetConv = currentConversion, targetDev = selectedDevice) => {
-    if (!targetDev || isDeploying) return false;
+    if (!targetConv || !targetDev || isDeploying) return false;
 
     setIsDeploying(true);
     setIsDryRun(dryRun);
     setDeploymentStatus('running');
 
-    setBatchStatuses(prev => ({
+    setBatchStatuses((prev) => ({
       ...prev,
       [targetConv.id]: dryRun ? 'simulating' : 'deploying',
     }));
@@ -305,25 +545,26 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
     await new Promise((r) => setTimeout(r, 550));
     if (dryRun) {
       appendLog('SUCCESS', `Dry-run simulation completed. Syntax validated against ${targetDev.vendor.toUpperCase()} schema.`, nodeId);
-      appendLog('INFO', `No hardware commit issued in Dry-Run mode.`, nodeId);
+      appendLog('INFO', `Result: 0 syntax rejections. 0 commit conflicts detected.`);
       setDeploymentStatus('success');
-      setBatchStatuses(prev => ({
+      setBatchStatuses((prev) => ({
         ...prev,
         [targetConv.id]: 'dry-run-ok',
       }));
     } else {
       if (targetDev.vendor === 'huawei') {
         appendLog('COMMAND', `commit`, nodeId);
-        await new Promise((r) => setTimeout(r, 600));
-        appendLog('SUCCESS', `Configuration committed to VRP Startup-Saved Database.`, nodeId);
+        appendLog('SUCCESS', `Commit phase completed. Configurations written to VRP system database.`, nodeId);
+        appendLog('COMMAND', `return`, nodeId);
       } else {
-        appendLog('COMMAND', `copy running-config startup-config`, nodeId);
-        await new Promise((r) => setTimeout(r, 600));
+        appendLog('COMMAND', `end`, nodeId);
+        appendLog('COMMAND', `write memory`, nodeId);
         appendLog('SUCCESS', `Building configuration... [OK]`, nodeId);
       }
-      appendLog('SUCCESS', `Session closed gracefully. Device Status: Online & Synced.`, nodeId);
+
+      appendLog('SUCCESS', `🎉 Deployment committed successfully to ${nodeName} (${ip})!`, nodeId);
       setDeploymentStatus('success');
-      setBatchStatuses(prev => ({
+      setBatchStatuses((prev) => ({
         ...prev,
         [targetConv.id]: 'deployed',
       }));
@@ -343,78 +584,69 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
         commandsExecuted: cleanLines.length,
         withheldCount: convWithheld.length,
       },
-      convWithheld.filter(w => w.reason === 'SECRET_MASKED').length
+      convWithheld.filter((w) => w.reason === 'SECRET_MASKED').length
     );
 
     return true;
   };
 
-  // Run Sequential Batch Deployment for all conversions
+  // Run Sequential Batch Deployment for all conversions (Strict Manual Target check)
   const handleDeployAllBatch = async () => {
-    if (isDeploying || isBatchDeploying) return;
+    if (isDeploying || isBatchDeploying || deployPayloads.length === 0) return;
 
     setIsBatchDeploying(true);
     appendLog('INFO', `========================================================`);
-    appendLog('INFO', `[BATCH DEPLOYMENT INITIATED] Queued ${conversions.length} payload files for sequential deployment.`);
+    appendLog('INFO', `[BATCH DEPLOYMENT INITIATED] Queued ${deployPayloads.length} payload files for sequential deployment.`);
 
     let deployedCount = 0;
     let skippedCount = 0;
 
-    for (let i = 0; i < conversions.length; i++) {
-      const conv = conversions[i];
-      const pHost = parseHostnameFromConversion(conv);
-      
-      // Determine device
-      const overrideDevId = deviceOverrides[conv.id];
-      let targetDev: Device | null = null;
-
-      if (overrideDevId) {
-        targetDev = devices.find(d => d.id === overrideDevId) || null;
-      } else {
-        const match = findMatchingDevice(pHost, devices);
-        targetDev = match.device;
-      }
+    for (let i = 0; i < deployPayloads.length; i++) {
+      const conv = deployPayloads[i];
+      const assignedDevId = selectedDeviceIds[conv.id];
+      const targetDev = assignedDevId ? devices.find((d) => d.id === assignedDevId) || null : null;
 
       appendLog('INFO', `--------------------------------------------------------`);
-      appendLog('INFO', `[BATCH ${i + 1}/${conversions.length}] Processing "${conv.filename}" (Parsed Hostname: "${pHost}")...`);
+      appendLog('INFO', `[BATCH ${i + 1}/${deployPayloads.length}] Checking payload "${conv.filename}"...`);
 
       if (!targetDev) {
-        appendLog('WARNING', `[BATCH ${i + 1}/${conversions.length}] ⚠️ Skipped "${conv.filename}" — No target device mapped or selected.`);
-        setBatchStatuses(prev => ({ ...prev, [conv.id]: 'skipped' }));
+        appendLog(
+          'WARNING',
+          `[BATCH ${i + 1}/${deployPayloads.length}] ⚠️ Skipped "${conv.filename}" — Unmapped payload. Strict manual target assignment is required for every file.`
+        );
+        setBatchStatuses((prev) => ({ ...prev, [conv.id]: 'skipped' }));
         skippedCount++;
-        await new Promise(r => setTimeout(r, 400));
         continue;
       }
 
-      // Automatically switch view to active conversion
-      if (onSelectConversion) {
-        onSelectConversion(conv.id);
-      }
+      setActiveDeployPayloadId(conv.id);
+      appendLog(
+        'INFO',
+        `[BATCH ${i + 1}/${deployPayloads.length}] Executing payload "${conv.filename}" ➔ Destination: ${targetDev.hostname} (${targetDev.managementIp})`
+      );
 
-      appendLog('INFO', `[BATCH ${i + 1}/${conversions.length}] Deploying to ${targetDev.hostname} (${targetDev.managementIp})...`);
-      
-      const success = await runExecution(false, conv, targetDev);
-      if (success) {
+      const ok = await runExecution(false, conv, targetDev);
+      if (ok) {
         deployedCount++;
       } else {
         skippedCount++;
       }
 
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 600));
     }
 
-    appendLog('INFO', `========================================================`);
-    appendLog('SUCCESS', `🎉 [BATCH COMPLETE] Finished sequential batch execution: ${deployedCount} Deployed, ${skippedCount} Skipped.`);
     setIsBatchDeploying(false);
+    appendLog('INFO', `========================================================`);
+    appendLog(
+      'SUCCESS',
+      `[BATCH COMPLETE] Finished sequential batch execution: ${deployedCount} deployed successfully, ${skippedCount} skipped.`
+    );
   };
 
-  // Filtered log entries
   const filteredLogs = logs.filter((log) => {
     if (severityFilter === 'ALL') return true;
     return log.severity === severityFilter;
   });
-
-  const cleanLines = currentConversion.cleanCli.split('\n');
 
   return (
     <div className="space-y-5">
@@ -430,631 +662,916 @@ export const DeployTestView: React.FC<DeployTestViewProps> = ({
           </p>
         </div>
 
-        {/* Global Batch Action Button */}
-        {totalConversions > 1 && (
+        {/* Top Explicit Ingestion Action & Sequential Batch Trigger */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          {/* Direct File Ingestion Button */}
+          <input
+            ref={fileUploadInputRef}
+            type="file"
+            multiple
+            accept=".txt,.cfg,.conf"
+            onChange={(e) => e.target.files && handleDirectUploadFiles(e.target.files)}
+            className="hidden"
+          />
           <button
             type="button"
-            disabled={isDeploying || isBatchDeploying}
-            onClick={handleDeployAllBatch}
-            className="h-9 px-4 rounded-lg bg-teal-600 hover:bg-teal-700 active:scale-[0.99] text-white text-xs font-semibold inline-flex items-center gap-2 transition-all shadow-xs cursor-pointer disabled:opacity-50 self-start sm:self-auto"
-            title="Sequentially deploy all converted files in the queue"
+            onClick={() => {
+              setIngestModalTab('upload');
+              setIsIngestModalOpen(true);
+            }}
+            className="h-9 px-3.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:border-[#1F8A7A] text-slate-800 dark:text-slate-200 text-xs font-semibold inline-flex items-center gap-2 transition-all shadow-2xs cursor-pointer"
+            title="Upload converted .txt target CLI scripts directly to deploy console"
           >
-            {isBatchDeploying ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Deploying Batch ({totalConversions} Files)...</span>
-              </>
-            ) : (
-              <>
-                <Layers className="w-3.5 h-3.5" />
-                <span>Deploy All Batch (Sequential)</span>
-              </>
-            )}
+            <Upload className="w-3.5 h-3.5 text-[#1F8A7A]" />
+            <span>{t.deploy.uploadPayloadBtn || 'Upload Payload Files (.txt)'}</span>
           </button>
-        )}
-      </div>
 
-      {/* 1. Converted Payload Selector & Batch Queue Bar */}
-      <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Active Payload Info */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/60 flex items-center justify-center text-[#1F8A7A] shrink-0">
-              <FileCode className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                  Active Payload: <span className="font-mono text-teal-600 dark:text-teal-400">{currentConversion.filename}</span>
-                </span>
-                <span className="text-[11px] px-2 py-0.5 rounded-full font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                  {currentConversionIndex + 1} of {totalConversions} {totalConversions === 1 ? 'file' : 'files'}
-                </span>
-                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  {currentConversion.sourceVendor.toUpperCase()} ➔ {currentConversion.targetVendor.toUpperCase()}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                Target VRP CLI • {cleanLines.length} statements • {currentConversion.fileSize || '2.0 KB'}
-              </p>
-            </div>
-          </div>
-
-          {/* Payload Selector Controls */}
-          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-            {/* Step Previous */}
+          {/* Sequential Batch Deploy Button */}
+          {totalConversions > 1 && (
             <button
               type="button"
-              disabled={currentConversionIndex <= 0 || isDeploying}
-              onClick={() => handleSwitchPayload(conversions[currentConversionIndex - 1].id)}
-              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 transition-colors cursor-pointer"
-              title="Previous Payload"
-              aria-label="Previous Payload"
+              disabled={isDeploying || isBatchDeploying}
+              onClick={handleDeployAllBatch}
+              className="h-9 px-4 rounded-lg bg-[#1F8A7A] hover:bg-[#176f62] active:scale-[0.99] text-white text-xs font-semibold inline-flex items-center gap-2 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+              title="Sequentially deploy all converted files in the queue that have assigned target devices"
             >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-
-            {/* Dropdown Selector */}
-            <select
-              value={currentConversion.id}
-              onChange={(e) => handleSwitchPayload(e.target.value)}
-              disabled={isDeploying}
-              className="h-8 px-2.5 text-xs font-medium rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-[#1F8A7A] cursor-pointer"
-            >
-              {conversions.map((conv, idx) => (
-                <option key={conv.id} value={conv.id}>
-                  {idx + 1}. {conv.filename} ({parseHostnameFromConversion(conv)})
-                </option>
-              ))}
-            </select>
-
-            {/* Step Next */}
-            <button
-              type="button"
-              disabled={currentConversionIndex >= totalConversions - 1 || isDeploying}
-              onClick={() => handleSwitchPayload(conversions[currentConversionIndex + 1].id)}
-              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 transition-colors cursor-pointer"
-              title="Next Payload"
-              aria-label="Next Payload"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* 5. Batch Progress Overview (When multiple files are converted) */}
-        {totalConversions > 1 && (
-          <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-[#1F8A7A]" />
-                <span>Batch Queue & Execution Status</span>
-              </span>
-              <span className="text-[10px] text-slate-400">Click any file to load active payload</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {conversions.map((c, i) => {
-                const pHost = parseHostnameFromConversion(c);
-                const devOverride = deviceOverrides[c.id];
-                const matched = devOverride ? devices.find(d => d.id === devOverride) : findMatchingDevice(pHost, devices).device;
-                const status = batchStatuses[c.id] || 'idle';
-                const isActive = c.id === currentConversion.id;
-
-                let statusBadge = (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-100 dark:bg-slate-800 text-slate-500">
-                    Ready
-                  </span>
-                );
-
-                if (status === 'deploying' || status === 'simulating') {
-                  statusBadge = (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300 animate-pulse font-semibold">
-                      {status === 'simulating' ? 'Simulating...' : 'Deploying...'}
-                    </span>
-                  );
-                } else if (status === 'deployed') {
-                  statusBadge = (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 font-semibold flex items-center gap-1">
-                      <Check className="w-2.5 h-2.5" /> Deployed
-                    </span>
-                  );
-                } else if (status === 'dry-run-ok') {
-                  statusBadge = (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 font-semibold">
-                      Dry-Run OK
-                    </span>
-                  );
-                } else if (status === 'skipped') {
-                  statusBadge = (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300">
-                      Skipped (Unmapped)
-                    </span>
-                  );
-                }
-
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => handleSwitchPayload(c.id)}
-                    className={`p-2 rounded-lg border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                      isActive
-                        ? 'border-[#1F8A7A] bg-teal-50/60 dark:bg-teal-950/30 ring-1 ring-[#1F8A7A]'
-                        : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-mono text-slate-400">#{i + 1}</span>
-                        <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate block">
-                          {c.filename}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5 flex items-center gap-1">
-                        <span>Node:</span>
-                        {matched ? (
-                          <span className="text-slate-700 dark:text-slate-300 font-mono">{matched.hostname}</span>
-                        ) : (
-                          <span className="text-amber-500 font-semibold">[Unmapped]</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="shrink-0">
-                      {statusBadge}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 2. Target Device Auto-Matching & Manual Assignment Card */}
-      <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3.5">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          {/* Target Device Selector & Auto-Match Status */}
-          <div className="flex-1 space-y-2">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                <Server className="w-4 h-4 text-[#1F8A7A]" />
-                <span>{t.deploy.selectDevice}:</span>
-              </label>
-
-              {/* Status Badge: Auto-Matched vs Unmapped vs Manual */}
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400">Parsed Hostname: <code className="font-mono text-slate-600 dark:text-slate-300 font-bold">{parsedHostname}</code></span>
-                
-                {isManuallyOverridden ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border border-sky-300/60 dark:border-sky-800/60">
-                    <ExternalLink className="w-3 h-3" /> Manual Selection
-                  </span>
-                ) : selectedDevice ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/60 dark:border-emerald-800/60 shadow-2xs animate-in fade-in">
-                    <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                    <span>Auto-Matched</span>
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300/60 dark:border-amber-800/60 shadow-2xs animate-pulse">
-                    <AlertTriangle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
-                    <span>Unmapped</span>
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Dropdown with Unmapped Empty Default Option */}
-            <div className="relative">
-              <select
-                value={effectiveDeviceId}
-                onChange={(e) => handleDeviceSelect(e.target.value)}
-                disabled={isDeploying}
-                className={`w-full px-3 py-2.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer focus:outline-hidden focus:ring-1 ${
-                  selectedDevice
-                    ? 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:ring-[#1F8A7A]'
-                    : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 focus:ring-amber-500'
-                }`}
-              >
-                <option value="">-- Select Target Device (Required for Execution) --</option>
-                {devices.map((device) => {
-                  const isMatched = device.hostname.toLowerCase().includes(parsedHostname.toLowerCase());
-                  return (
-                    <option key={device.id} value={device.id}>
-                      {device.hostname} ({device.managementIp}) — {device.vendor.toUpperCase()} {device.isEveNg ? `[EVE-NG #${device.eveNodeId}]` : '[Physical]'} {isMatched ? '★ (Matched)' : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-          </div>
-
-          {/* 4. Action Triggers with Safety Lock Validation */}
-          <div className="flex items-center gap-3 shrink-0 self-end lg:self-center">
-            {/* Simulate Dry Run */}
-            <button
-              type="button"
-              disabled={isDeploying || !selectedDevice}
-              onClick={() => runExecution(true)}
-              className="flex items-center gap-1.5 h-10 px-4 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs border border-slate-200 dark:border-slate-700"
-              title={!selectedDevice ? "Safety Lock Engaged: Target device required" : "Run syntax simulation without committing changes"}
-            >
-              <RotateCcw className={`w-3.5 h-3.5 ${isDeploying && isDryRun ? 'animate-spin' : ''}`} />
-              <span>{t.deploy.simulateBtn}</span>
-            </button>
-
-            {/* Live Push to EVE-NG */}
-            <button
-              type="button"
-              disabled={isDeploying || !selectedDevice}
-              onClick={() => runExecution(false)}
-              className="flex items-center gap-1.5 h-10 px-5 text-xs font-semibold rounded-lg bg-[#1F8A7A] hover:bg-[#176f62] text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs"
-              title={!selectedDevice ? "Safety Lock Engaged: Target device required" : "Execute SSH push and commit configuration"}
-            >
-              {selectedDevice ? <Play className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-200" />}
-              <span>{t.deploy.pushBtn}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Safety Lock Warning Banner when Unmapped */}
-        {!selectedDevice && (
-          <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-3 animate-in fade-in">
-            <div className="flex items-center gap-2.5">
-              <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-              <span>
-                <strong>Safety Lock Engaged:</strong> No target device selected for payload <code className="font-mono font-bold">{currentConversion.filename}</code>. Simulation and push buttons are locked to prevent configuration push without a verified destination node.
-              </span>
-            </div>
-            <span className="text-[10px] font-mono uppercase px-2 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-100 rounded font-bold shrink-0">
-              Locked
-            </span>
-          </div>
-        )}
-
-        {/* Selected Node Details Pill Strip */}
-        {selectedDevice && (
-          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-            <div className="flex items-center gap-1.5">
-              <Server className="w-3.5 h-3.5 text-[#1F8A7A]" />
-              <span><strong>Hostname:</strong> <span className="font-mono text-slate-800 dark:text-slate-200">{selectedDevice.hostname}</span></span>
-            </div>
-            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-            <div className="flex items-center gap-1.5">
-              <span><strong>IP:</strong> <code className="font-mono text-slate-700 dark:text-slate-300">{selectedDevice.managementIp}:{selectedDevice.sshPort}</code></span>
-            </div>
-            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-            <div className="flex items-center gap-1.5">
-              <span><strong>Vendor OS:</strong></span>
-              {selectedDevice.vendor === 'cisco' ? (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200/60 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50">
-                  Cisco IOS-XE
-                </span>
+              {isBatchDeploying ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Deploying Batch ({totalConversions} Files)...</span>
+                </>
               ) : (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200/60 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/50">
-                  Huawei VRP
-                </span>
+                <>
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Deploy All Batch (Sequential)</span>
+                </>
               )}
-            </div>
-            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-            <div className="flex items-center gap-1.5">
-              <span><strong>Role:</strong> {selectedDevice.networkRole}</span>
-            </div>
-            {selectedDevice.isEveNg && (
-              <>
-                <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-                <div className="flex items-center gap-1 text-[#1F8A7A] font-medium font-mono text-[11px]">
-                  <Cpu className="w-3.5 h-3.5" />
-                  <span>EVE-NG Node ID #{selectedDevice.eveNodeId}</span>
-                </div>
-              </>
-            )}
-            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-            <div className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${selectedDevice.status === 'Online' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-              <span className="font-medium text-slate-700 dark:text-slate-300">{selectedDevice.status}</span>
-            </div>
-          </div>
-        )}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* 3. Main Workspace: Target CLI Active Payload Preview (Left 5 Cols) + Terminal Stream (Right 7 Cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        
-        {/* Left Column: Target CLI Active Payload Preview & Withheld Lines Panel */}
-        <div className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs overflow-hidden flex flex-col h-[600px]">
-          {/* Subtab Header */}
-          <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/60 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-900 text-xs">
-              <button
-                type="button"
-                onClick={() => setLeftTab('preview')}
-                className={`px-3 py-1.5 rounded-md font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-                  leftTab === 'preview'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                <FileCode className="w-3.5 h-3.5 text-[#1F8A7A]" />
-                <span>Target CLI Script</span>
-                <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
-                  {cleanLines.length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setLeftTab('withheld')}
-                className={`px-3 py-1.5 rounded-md font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-                  leftTab === 'withheld'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
-                <span>Withheld Lines</span>
-                <span className={`ml-1 text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                  withheldLines.length > 0
-                    ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-bold'
-                    : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                }`}>
-                  {withheldLines.length}
-                </span>
-              </button>
-            </div>
-
-            {/* Quick Copy Button */}
-            {leftTab === 'preview' && (
-              <button
-                type="button"
-                onClick={handleCopyCli}
-                className="px-2.5 py-1 text-xs font-medium rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs shrink-0"
-                title="Copy entire clean target CLI script to clipboard"
-              >
-                {copiedCli ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-500" />
-                    <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3 text-slate-400" />
-                    <span className="text-[11px]">Copy CLI</span>
-                  </>
-                )}
-              </button>
-            )}
+      {/* Empty Queue State: Prominent Central Upload Dropzone (Rendered only when queue is clean/empty) */}
+      {!currentConversion && (
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`p-12 sm:p-16 rounded-xl border-2 border-dashed transition-all text-center space-y-4 shadow-2xs ${
+            isDraggingFile
+              ? 'border-[#1F8A7A] bg-teal-50/60 dark:bg-teal-950/30'
+              : 'border-slate-300 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 hover:border-slate-400 dark:hover:border-slate-700'
+          }`}
+        >
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-900 flex items-center justify-center text-[#1F8A7A]">
+            <Upload className="w-7 h-7" />
           </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+              {t.deploy.emptyQueueTitle || 'No Payload Files in Deployment Queue'}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+              {t.deploy.emptyQueueDesc || 'Drag & drop converted .txt scripts here, or click to browse and upload deployment payloads.'}
+            </p>
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => {
+                setIngestModalTab('upload');
+                setIsIngestModalOpen(true);
+              }}
+              className="h-9 px-5 text-xs font-semibold rounded-lg bg-[#1F8A7A] text-white hover:bg-[#176f62] transition-colors shadow-2xs cursor-pointer inline-flex items-center gap-2"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>{t.deploy.uploadPayloadBtn || 'Upload Payload Files (.txt)'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
-          {/* Subtab View 1: Target CLI Preview with Line Numbers & Syntax Highlights */}
-          {leftTab === 'preview' && (
-            <div className="flex-1 overflow-y-auto font-mono text-xs p-3 bg-slate-950 text-slate-200 selection:bg-[#1F8A7A]/40">
-              <div className="space-y-0.5">
-                {cleanLines.map((line, idx) => {
-                  const lineTrimmed = line.trim();
-                  const isComment = lineTrimmed.startsWith('#') || lineTrimmed.startsWith('!');
-                  const isSysname = lineTrimmed.startsWith('sysname') || lineTrimmed.startsWith('hostname');
-                  const isInterface = lineTrimmed.startsWith('interface');
-                  const isReturn = lineTrimmed === 'return' || lineTrimmed === 'end' || lineTrimmed === 'commit';
-                  const isRoute = lineTrimmed.startsWith('ip route');
-
-                  let highlightClass = 'text-slate-300';
-                  if (isComment) highlightClass = 'text-slate-500 italic';
-                  else if (isSysname) highlightClass = 'text-teal-300 font-bold';
-                  else if (isInterface) highlightClass = 'text-sky-300 font-semibold';
-                  else if (isReturn) highlightClass = 'text-amber-400 font-semibold';
-                  else if (isRoute) highlightClass = 'text-indigo-300';
-
-                  return (
-                    <div key={`cli-line-${idx}`} className="flex items-start hover:bg-slate-900/80 rounded px-1 py-0.5 leading-snug">
-                      <span className="w-8 shrink-0 text-slate-600 select-none text-[11px] text-right pr-3 font-mono tabular-nums">
-                        {idx + 1}
-                      </span>
-                      <span className={`break-all whitespace-pre-wrap ${highlightClass}`}>
-                        {line}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Subtab View 2: Withheld Lines Guardrail Panel */}
-          {leftTab === 'withheld' && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-2.5 bg-slate-50/40 dark:bg-slate-900">
-              {withheldLines.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-2" />
-                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                    {t.deploy.noWithheld}
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                    100% of translated commands passed executable guardrails without withheld secrets.
-                  </span>
+      {/* Main Deployment Console (Rendered when active payload is available) */}
+      {currentConversion && (
+        <>
+          {/* 1. Converted Payload Selector & Batch Queue Bar */}
+          <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Active Payload Info */}
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/60 flex items-center justify-center text-[#1F8A7A] shrink-0">
+                  <FileCode className="w-4 h-4" />
                 </div>
-              ) : (
-                withheldLines.map((w, idx) => (
-                  <div
-                    key={`withheld-${idx}`}
-                    className="p-3 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/20 text-xs space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 font-bold">
-                        Line {w.lineNum} · {w.reason}
-                      </span>
-                    </div>
-                    <pre className="p-2 rounded bg-white dark:bg-slate-950 font-mono text-[11px] text-slate-700 dark:text-slate-300 overflow-x-auto border border-amber-200/50 dark:border-amber-900/40">
-                      {w.sourceText}
-                    </pre>
-                    <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
-                      {w.explanation}
-                    </p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                      Active Payload: <span className="font-mono text-teal-600 dark:text-teal-400">{currentConversion.filename}</span>
+                    </span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                      {currentConversionIndex + 1} of {totalConversions} {totalConversions === 1 ? 'file' : 'files'}
+                    </span>
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      {currentConversion.sourceVendor.toUpperCase()} ➔ {currentConversion.targetVendor.toUpperCase()}
+                    </span>
                   </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* Bottom Footer Information */}
-          <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#1F8A7A]" />
-              <span>AES-256 Secrets Scrubbed</span>
-            </span>
-            <span className="font-mono text-[10px]">
-              Ready for {currentConversion.targetVendor.toUpperCase()} Engine
-            </span>
-          </div>
-        </div>
-
-        {/* Right Column: Real-time Terminal Log Stream (7 Cols) */}
-        <div className="lg:col-span-7 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 text-slate-200 shadow-md flex flex-col h-[600px] overflow-hidden">
-          {/* Terminal Top Control Bar */}
-          <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 mr-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Target {currentConversion.targetVendor.toUpperCase()} CLI • {currentConversion.cleanCli.split('\n').filter(Boolean).length} statements • {currentConversion.fileSize || '2.0 KB'}
+                  </p>
+                </div>
               </div>
-              <Terminal className="w-4 h-4 text-[#1F8A7A]" />
-              <span className="font-mono font-semibold text-slate-300">
-                {t.deploy.terminalTitle}
-              </span>
-              {(isDeploying || isBatchDeploying) && (
-                <span className="flex items-center gap-1 text-[11px] text-teal-400 font-mono animate-pulse">
-                  <Radio className="w-3 h-3" />
-                  <span>{isBatchDeploying ? 'BATCH STREAMING' : 'STREAMING'}</span>
-                </span>
-              )}
-            </div>
 
-            {/* Severity Filters */}
-            <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px]">
-              {(['ALL', 'INFO', 'COMMAND', 'SUCCESS', 'WARNING', 'ERROR'] as LogSeverity[]).map((sev) => (
+              {/* Payload Selector Dropdown with Accessibility Contrast Fix */}
+              <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+                {/* Step Previous */}
                 <button
-                  key={sev}
                   type="button"
-                  onClick={() => setSeverityFilter(sev)}
-                  className={`px-2 py-0.5 rounded-md font-mono transition-colors cursor-pointer ${
-                    severityFilter === sev
-                      ? 'bg-slate-800 text-white font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
+                  disabled={currentConversionIndex <= 0 || isDeploying}
+                  onClick={() => handleSwitchPayload(deployPayloads[currentConversionIndex - 1].id)}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 transition-colors cursor-pointer"
+                  title="Previous Payload"
+                  aria-label="Previous Payload"
                 >
-                  {sev}
+                  <ChevronLeft className="w-4 h-4" />
                 </button>
-              ))}
+
+                {/* Dropdown Selector */}
+                <select
+                  value={currentConversion.id}
+                  onChange={(e) => handleSwitchPayload(e.target.value)}
+                  disabled={isDeploying}
+                  style={{ colorScheme: 'dark light' }}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-[#1F8A7A] max-w-[240px] truncate cursor-pointer shadow-2xs"
+                >
+                  {deployPayloads.map((c, i) => (
+                    <option
+                      key={c.id}
+                      value={c.id}
+                      className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 py-1 font-medium"
+                    >
+                      {i + 1}. {c.filename} ({c.targetVendor.toUpperCase()})
+                    </option>
+                  ))}
+                </select>
+
+                {/* Step Next */}
+                <button
+                  type="button"
+                  disabled={currentConversionIndex >= totalConversions - 1 || isDeploying}
+                  onClick={() => handleSwitchPayload(deployPayloads[currentConversionIndex + 1].id)}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 transition-colors cursor-pointer"
+                  title="Next Payload"
+                  aria-label="Next Payload"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            {/* Terminal Actions */}
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={autoScroll}
-                  onChange={(e) => setAutoScroll(e.target.checked)}
-                  className="rounded-xs border-slate-700 bg-slate-900 text-[#1F8A7A] focus:ring-0"
-                />
-                <span>{t.deploy.autoscroll}</span>
-              </label>
+            {/* Horizontal Batch Queue File Cards (with visible [x] individual delete icons) */}
+            {totalConversions > 1 && (
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-2 flex items-center justify-between">
+                  <span>Batch Queue ({totalConversions} Payload Files)</span>
+                  <span className="text-[10px] text-slate-400">Click card to switch active payload • (x) to remove from queue</span>
+                </div>
 
-              <button
-                type="button"
-                onClick={handleClearLogs}
-                className="p-1 rounded text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                title={t.deploy.clearLogs}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                  {deployPayloads.map((c, i) => {
+                    const isActive = c.id === currentConversion.id;
+                    const assignedDevId = selectedDeviceIds[c.id];
+                    const assignedDev = assignedDevId ? devices.find((d) => d.id === assignedDevId) : null;
+                    const bStatus = batchStatuses[c.id] || 'idle';
 
-              <button
-                type="button"
-                onClick={handleDownloadLogs}
-                className="p-1 rounded text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                title={t.deploy.downloadLogs}
-              >
-                <Download className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                    let statusBadge = (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700">
+                        Queued
+                      </span>
+                    );
+                    if (bStatus === 'deploying' || bStatus === 'simulating') {
+                      statusBadge = (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300 animate-pulse border border-teal-300 dark:border-teal-800">
+                          Running
+                        </span>
+                      );
+                    } else if (bStatus === 'deployed' || bStatus === 'dry-run-ok') {
+                      statusBadge = (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                          OK
+                        </span>
+                      );
+                    } else if (bStatus === 'skipped') {
+                      statusBadge = (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                          Skipped
+                        </span>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => handleSwitchPayload(c.id)}
+                        className={`p-2.5 rounded-lg border text-left flex items-center justify-between gap-2 transition-all cursor-pointer group ${
+                          isActive
+                            ? 'border-[#1F8A7A] bg-teal-50/60 dark:bg-teal-950/30 ring-1 ring-[#1F8A7A] shadow-xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono text-slate-400">#{i + 1}</span>
+                            <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate block">
+                              {c.filename}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5 flex items-center gap-1">
+                            <span>Target:</span>
+                            {assignedDev ? (
+                              <span className="text-teal-700 dark:text-teal-300 font-mono font-medium truncate">
+                                {assignedDev.hostname}
+                              </span>
+                            ) : (
+                              <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-0.5">
+                                <AlertTriangle className="w-2.5 h-2.5" />
+                                [Unmapped]
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {statusBadge}
+                          {/* Visible Individual Delete (x) Icon */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeletePayload(c.id, c.filename);
+                            }}
+                            className="p-1 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors shrink-0 cursor-pointer"
+                            title={`Delete ${c.filename} from deployment queue`}
+                            aria-label={`Delete ${c.filename}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Terminal Console View */}
-          <div
-            ref={terminalRef}
-            className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-1.5 leading-relaxed selection:bg-[#1F8A7A]/40"
-          >
-            {filteredLogs.map((log) => {
-              let sevColor = 'text-slate-400';
-              if (log.severity === 'SUCCESS') sevColor = 'text-emerald-400';
-              if (log.severity === 'WARNING') sevColor = 'text-amber-400';
-              if (log.severity === 'ERROR') sevColor = 'text-red-400';
-              if (log.severity === 'COMMAND') sevColor = 'text-teal-300';
+          {/* 2. STRICT MANUAL TARGET SELECTION & SAFETY LOCK CARD */}
+          <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-4">
+            {/* Top Row: Label, Status Badge, and Full-width Target Device Dropdown */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                  <Server className="w-4 h-4 text-[#1F8A7A]" />
+                  <span>{t.deploy.selectDevice}:</span>
+                </label>
 
-              return (
-                <div key={log.id} className="flex items-start gap-2 hover:bg-slate-900/60 rounded px-1 py-0.5">
-                  <span className="text-slate-600 select-none text-[11px] tabular-nums shrink-0">
-                    [{log.timestamp}]
-                  </span>
-                  <span className={`font-bold select-none text-[11px] shrink-0 ${sevColor}`}>
-                    [{log.severity}]
-                  </span>
-                  {log.nodeId && (
-                    <span className="text-[10px] text-teal-400 bg-teal-950/60 px-1 py-0.2 rounded border border-teal-800/40 shrink-0">
-                      Node #{log.nodeId}
+                {/* Target Status Badge: Strictly [Assigned] vs [Unmapped] */}
+                <div className="flex items-center gap-2">
+                  {selectedDevice ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/60 dark:border-emerald-800/60 shadow-2xs">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Assigned: {selectedDevice.hostname}</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300/60 dark:border-amber-800/60 shadow-2xs animate-pulse">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      <span>{t.deploy.unmappedWarning || 'Unmapped - Device Selection Required'}</span>
                     </span>
                   )}
-                  <span className="text-slate-200 whitespace-pre-wrap break-all">
-                    {log.message}
+                </div>
+              </div>
+
+              {/* Full-width Dropdown with Accessible High-Contrast Dark Styling */}
+              <div className="relative">
+                <select
+                  value={effectiveDeviceId}
+                  onChange={(e) => handleDeviceSelect(e.target.value)}
+                  disabled={isDeploying}
+                  style={{ colorScheme: 'dark light' }}
+                  className={`w-full px-3.5 py-2.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer focus:outline-hidden focus:ring-2 shadow-2xs ${
+                    selectedDevice
+                      ? 'bg-white dark:bg-slate-800 border-teal-500/80 dark:border-teal-600 text-slate-900 dark:text-slate-100 focus:ring-[#1F8A7A]'
+                      : 'bg-white dark:bg-slate-800 border-amber-400 dark:border-amber-600/80 text-amber-900 dark:text-amber-200 focus:ring-amber-500'
+                  }`}
+                >
+                  <option
+                    value=""
+                    className="bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-300 font-semibold py-1.5"
+                  >
+                    {t.deploy.selectDeviceRequired || '-- Select Target Device (Required) --'}
+                  </option>
+                  {devices.map((device) => (
+                    <option
+                      key={device.id}
+                      value={device.id}
+                      className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 py-1.5 font-medium"
+                    >
+                      {device.hostname} ({device.managementIp}) — {device.vendor.toUpperCase()} {device.isEveNg ? `[EVE-NG Node #${device.eveNodeId}]` : '[Physical Hardware]'} ({device.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Safety Lock Warning Banner when Unmapped */}
+            {!selectedDevice && (
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex items-center gap-2.5">
+                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>
+                    <strong>Safety Lock Engaged:</strong> {t.deploy.safetyLockBanner || 'Dry-run simulation and hardware push are strictly disabled until an operator explicitly selects a destination device.'}
                   </span>
                 </div>
-              );
-            })}
-
-            {(isDeploying || isBatchDeploying) && (
-              <div className="flex items-center gap-2 text-teal-400 pt-1">
-                <span className="inline-block w-2 h-4 bg-teal-400 animate-pulse" />
-                <span className="text-xs">
-                  {isBatchDeploying
-                    ? 'Executing sequential batch deployment across lab nodes...'
-                    : isDryRun
-                    ? t.deploy.runningDryRun
-                    : t.deploy.pushingConfig}
+                <span className="text-[10px] font-mono uppercase px-2 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-100 rounded font-bold shrink-0">
+                  Locked
                 </span>
               </div>
             )}
+
+            {/* Bottom Row: Target Metadata Info Badges (Left) & Action Buttons (Right) */}
+            <div className="pt-3.5 border-t border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              {/* Left Side: Target Metadata Info Badges */}
+              <div className="min-w-0 flex-1">
+                {selectedDevice ? (
+                  <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs text-slate-500 dark:text-slate-400">
+                    <div className="flex items-center gap-1.5">
+                      <Server className="w-3.5 h-3.5 text-[#1F8A7A]" />
+                      <span>
+                        <strong>Hostname:</strong>{' '}
+                        <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">{selectedDevice.hostname}</span>
+                      </span>
+                    </div>
+                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+                    <div className="flex items-center gap-1.5">
+                      <span>
+                        <strong>IP:</strong>{' '}
+                        <code className="font-mono text-slate-700 dark:text-slate-300">{selectedDevice.managementIp}:{selectedDevice.sshPort}</code>
+                      </span>
+                    </div>
+                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+                    <div className="flex items-center gap-1.5">
+                      <span><strong>Vendor OS:</strong></span>
+                      {selectedDevice.vendor === 'cisco' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200/60 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50">
+                          Cisco IOS-XE
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200/60 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/50">
+                          Huawei VRP
+                        </span>
+                      )}
+                    </div>
+                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+                    <div className="flex items-center gap-1.5">
+                      <span><strong>Role:</strong> {selectedDevice.networkRole}</span>
+                    </div>
+                    {selectedDevice.isEveNg && (
+                      <>
+                        <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+                        <div className="flex items-center gap-1 text-[#1F8A7A] font-medium font-mono text-[11px]">
+                          <Cpu className="w-3.5 h-3.5" />
+                          <span>EVE-NG Node ID #{selectedDevice.eveNodeId}</span>
+                        </div>
+                      </>
+                    )}
+                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${selectedDevice.status === 'Online' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                      <span className="font-medium text-slate-700 dark:text-slate-300">{selectedDevice.status}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
+                    <Server className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>Select a destination hardware from the dropdown above to map node metadata and unlock deployment actions.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Right Side: Action Buttons Group (Bottom-Right corner of Target Device card) */}
+              <div className="flex items-center gap-2.5 shrink-0 self-end md:self-auto">
+                {/* Simulate Dry Run */}
+                <button
+                  type="button"
+                  disabled={isDeploying || !selectedDevice}
+                  onClick={() => runExecution(true)}
+                  className="flex items-center gap-1.5 h-9 px-4 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs border border-slate-200 dark:border-slate-700 whitespace-nowrap"
+                  title={!selectedDevice ? 'Safety Lock Engaged: Target device required' : 'Run syntax simulation without committing changes'}
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${isDeploying && isDryRun ? 'animate-spin' : ''}`} />
+                  <span>{t.deploy.simulateBtn}</span>
+                </button>
+
+                {/* Live Push to EVE-NG */}
+                <button
+                  type="button"
+                  disabled={isDeploying || !selectedDevice}
+                  onClick={() => runExecution(false)}
+                  className="flex items-center gap-1.5 h-9 px-5 text-xs font-semibold rounded-lg bg-[#1F8A7A] hover:bg-[#176f62] text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs whitespace-nowrap"
+                  title={!selectedDevice ? 'Safety Lock Engaged: Target device required' : 'Execute SSH push and commit configuration'}
+                >
+                  {selectedDevice ? <Play className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-200" />}
+                  <span>{t.deploy.pushBtn}</span>
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Terminal Bottom Status Bar */}
-          <div className="px-4 py-2.5 bg-slate-900/90 border-t border-slate-800 text-[11px] flex items-center justify-between text-slate-400 font-mono">
-            <div>
-              Status:{' '}
-              <span
-                className={`font-semibold ${
-                  deploymentStatus === 'success'
-                    ? 'text-emerald-400'
-                    : deploymentStatus === 'running'
-                    ? 'text-teal-400'
-                    : 'text-slate-400'
+          {/* 3. Main Workspace: Target CLI Active Payload Preview (Left 5 Cols) + Terminal Stream (Right 7 Cols) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Left Column: Target CLI Active Payload Preview & Withheld Lines Panel */}
+            <div className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs overflow-hidden flex flex-col h-[600px]">
+              {/* Subtab Header */}
+              <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/60 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-900 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setLeftTab('preview')}
+                    className={`px-3 py-1.5 rounded-md font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                      leftTab === 'preview'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <FileCode className="w-3.5 h-3.5 text-[#1F8A7A]" />
+                    <span>Target CLI Script</span>
+                    <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                      {currentConversion.cleanCli.split('\n').filter(Boolean).length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLeftTab('withheld')}
+                    className={`px-3 py-1.5 rounded-md font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                      leftTab === 'withheld'
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Guardrails</span>
+                    {withheldLines.length > 0 && (
+                      <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
+                        {withheldLines.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Copy CLI action button */}
+                {leftTab === 'preview' && (
+                  <button
+                    type="button"
+                    onClick={handleCopyCli}
+                    className="p-1.5 rounded-md text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer text-xs flex items-center gap-1"
+                    title="Copy full CLI script to clipboard"
+                  >
+                    {copiedCli ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span className="text-[11px]">{copiedCli ? 'Copied' : 'Copy'}</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Panel Content */}
+              <div className="flex-1 overflow-auto p-3 text-xs font-mono bg-slate-950 text-slate-200">
+                {leftTab === 'preview' ? (
+                  <table className="w-full border-collapse">
+                    <tbody>
+                      {currentConversion.cleanCli.split('\n').map((line, idx) => (
+                        <tr key={idx} className="hover:bg-slate-900/60">
+                          <td className="w-10 pr-3 text-right select-none text-slate-600 text-[11px] align-top font-mono">
+                            {idx + 1}
+                          </td>
+                          <td className="text-slate-200 whitespace-pre font-mono">
+                            {line.startsWith('#') || line.startsWith('!') ? (
+                              <span className="text-slate-500 italic">{line}</span>
+                            ) : line.startsWith('sysname') || line.startsWith('hostname') ? (
+                              <span className="text-teal-400 font-bold">{line}</span>
+                            ) : line.startsWith('interface') || line.startsWith('router') || line.startsWith('ospf') ? (
+                              <span className="text-amber-300 font-semibold">{line}</span>
+                            ) : (
+                              line
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="space-y-3 font-sans p-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-amber-400">
+                      <ShieldAlert className="w-4 h-4 shrink-0" />
+                      <span>{t.deploy.withheldPanelTitle}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      {t.deploy.withheldPanelSubtitle}
+                    </p>
+
+                    {withheldLines.length === 0 ? (
+                      <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 text-center text-slate-400 text-xs">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400 mx-auto mb-1" />
+                        <span>{t.deploy.noWithheld}</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {withheldLines.map((w, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/80 text-[11px] space-y-1"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-amber-400 font-mono font-semibold">
+                                Line #{w.lineNum} • {w.reason}
+                              </span>
+                              <span className="text-[10px] text-slate-500 uppercase px-1.5 py-0.2 rounded bg-slate-800">
+                                Protected
+                              </span>
+                            </div>
+                            <div className="font-mono text-slate-300 truncate bg-slate-950 px-2 py-1 rounded">
+                              {w.sourceText}
+                            </div>
+                            <p className="text-slate-400 text-[10px] italic">
+                              {w.explanation}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right Column: Real-time Terminal Stream */}
+            <div className="lg:col-span-7 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 text-slate-100 shadow-2xs overflow-hidden flex flex-col h-[600px]">
+              {/* Terminal Title Bar */}
+              <div className="px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500/80 inline-block" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80 inline-block" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-green-500/80 inline-block" />
+                  </div>
+                  <span className="font-mono text-slate-300 text-xs font-semibold ml-2">
+                    {t.deploy.terminalTitle || 'Terminal Stream'}
+                  </span>
+                </div>
+
+                {/* Filter and Clear/Export buttons */}
+                <div className="flex items-center gap-2">
+                  {/* Severity Filter */}
+                  <select
+                    value={severityFilter}
+                    onChange={(e) => setSeverityFilter(e.target.value as LogSeverity)}
+                    style={{ colorScheme: 'dark' }}
+                    className="px-2 py-1 text-[11px] rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono focus:outline-hidden cursor-pointer"
+                  >
+                    <option value="ALL">All Levels</option>
+                    <option value="COMMAND">Commands</option>
+                    <option value="INFO">Info</option>
+                    <option value="SUCCESS">Success</option>
+                    <option value="WARNING">Warnings</option>
+                    <option value="ERROR">Errors</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={handleClearLogs}
+                    className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                    title={t.deploy.clearLogs}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadLogs}
+                    className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                    title={t.deploy.downloadLogs}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Terminal Log Stream Window */}
+              <div
+                ref={terminalRef}
+                className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-1.5 select-text"
+              >
+                {filteredLogs.length === 0 ? (
+                  <div className="text-slate-600 text-center py-12">
+                    No log output matches current severity filter.
+                  </div>
+                ) : (
+                  filteredLogs.map((log) => {
+                    let color = 'text-slate-300';
+                    let prefix = '[INFO]';
+                    if (log.severity === 'SUCCESS') {
+                      color = 'text-emerald-400';
+                      prefix = '[OK]';
+                    } else if (log.severity === 'WARNING') {
+                      color = 'text-amber-400';
+                      prefix = '[WARN]';
+                    } else if (log.severity === 'ERROR') {
+                      color = 'text-red-400';
+                      prefix = '[ERR]';
+                    } else if (log.severity === 'COMMAND') {
+                      color = 'text-teal-300 font-bold';
+                      prefix = '>';
+                    }
+
+                    return (
+                      <div key={log.id} className="flex items-start gap-2 leading-relaxed">
+                        <span className="text-slate-600 text-[11px] shrink-0 select-none">
+                          {log.timestamp}
+                        </span>
+                        <span className="text-slate-500 font-bold shrink-0 select-none">
+                          {prefix}
+                        </span>
+                        <span className={`${color} break-all flex-1`}>
+                          {log.message}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Terminal Footer Bar with Auto-scroll switch */}
+              <div className="px-4 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Deployment Daemon Online</span>
+                </div>
+
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoScroll}
+                    onChange={(e) => setAutoScroll(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-[#1F8A7A] focus:ring-0 cursor-pointer"
+                  />
+                  <span>{t.deploy.autoscroll}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Dual-Tab Payload Ingestion Modal */}
+      {isIngestModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
+            onClick={() => setIsIngestModalOpen(false)}
+          />
+
+          {/* Dialog Container */}
+          <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] z-10 animate-in fade-in zoom-in-95">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/80 dark:bg-slate-800/50">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-900 flex items-center justify-center text-[#1F8A7A]">
+                  <Upload className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                    {t.deploy.ingestModalTitle || 'Import Deployment Payload'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {t.deploy.ingestModalDesc || 'Upload converted CLI scripts or paste raw command statements into deployment queue'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsIngestModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Tabs: Tab 1 (Upload File) vs Tab 2 (Paste CLI Text) */}
+            <div className="px-6 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIngestModalTab('upload')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  ingestModalTab === 'upload'
+                    ? 'bg-teal-50 dark:bg-teal-950/60 text-[#1F8A7A] dark:text-teal-300 border border-teal-200 dark:border-teal-800 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                 }`}
               >
-                {deploymentStatus === 'success'
-                  ? 'SUCCESS: IDLE'
-                  : deploymentStatus === 'running'
-                  ? 'EXECUTING'
-                  : 'READY'}
-              </span>
+                <Upload className="w-3.5 h-3.5" />
+                <span>{t.deploy.tabUploadFile || 'Upload File (.txt, .cfg)'}</span>
+                {modalStagedFiles.length > 0 && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200">
+                    {modalStagedFiles.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIngestModalTab('paste')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  ingestModalTab === 'paste'
+                    ? 'bg-teal-50 dark:bg-teal-950/60 text-[#1F8A7A] dark:text-teal-300 border border-teal-200 dark:border-teal-800 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>{t.deploy.tabPasteCli || 'Paste CLI Text'}</span>
+                {modalPasteCli.trim() && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200">
+                    {modalPasteCli.trim().split('\n').length}L
+                  </span>
+                )}
+              </button>
             </div>
-            <div className="flex items-center gap-3">
-              <span>SSH Protocol 2.0 · ECDSA</span>
-              <span>·</span>
-              <span>EVE-NG Socket Active</span>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {/* Tab 1: Upload File */}
+              {ingestModalTab === 'upload' && (
+                <div className="space-y-4">
+                  {/* Hidden File Input */}
+                  <input
+                    ref={modalFileInputRef}
+                    type="file"
+                    multiple
+                    accept=".txt,.cfg,.conf"
+                    onChange={(e) => e.target.files && handleStageFiles(e.target.files)}
+                    className="hidden"
+                  />
+
+                  {/* Dropzone */}
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIsModalDragging(true); }}
+                    onDragLeave={() => setIsModalDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsModalDragging(false);
+                      if (e.dataTransfer.files) handleStageFiles(e.dataTransfer.files);
+                    }}
+                    onClick={() => modalFileInputRef.current?.click()}
+                    className={`p-8 rounded-xl border-2 border-dashed transition-all text-center cursor-pointer space-y-3 ${
+                      isModalDragging
+                        ? 'border-[#1F8A7A] bg-teal-50/70 dark:bg-teal-950/40'
+                        : 'border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 hover:border-[#1F8A7A]'
+                    }`}
+                  >
+                    <div className="w-12 h-12 mx-auto rounded-xl bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-900 flex items-center justify-center text-[#1F8A7A]">
+                      <Upload className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        Drag and drop payload files here, or <span className="text-[#1F8A7A] underline">browse files</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Supports .txt, .cfg, and .conf target CLI files (single or batch upload)
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Staged Files List */}
+                  {modalStagedFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                        <span className="font-semibold">Ready to Ingest ({modalStagedFiles.length} files)</span>
+                        <button
+                          type="button"
+                          onClick={() => setModalStagedFiles([])}
+                          className="text-[11px] text-red-500 hover:underline cursor-pointer"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 border border-slate-200 dark:border-slate-800 rounded-lg p-2 bg-slate-50/40 dark:bg-slate-900">
+                        {modalStagedFiles.map((sf, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between p-2 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileCode className="w-4 h-4 text-[#1F8A7A] shrink-0" />
+                              <span className="font-mono text-slate-800 dark:text-slate-200 truncate">{sf.file.name}</span>
+                              <span className="text-[10px] text-slate-400">({(sf.file.size / 1024).toFixed(1)} KB • {sf.linesCount} lines)</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setModalStagedFiles((prev) => prev.filter((_, i) => i !== idx))}
+                              className="p-1 text-slate-400 hover:text-red-500 rounded-sm cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: Paste CLI Text */}
+              {ingestModalTab === 'paste' && (
+                <div className="space-y-4">
+                  {/* Reference Name Field */}
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                      {t.deploy.payloadNameLabel || 'Payload Reference Name'}
+                    </label>
+                    <input
+                      type="text"
+                      value={modalRefName}
+                      onChange={(e) => setModalRefName(e.target.value)}
+                      placeholder={t.deploy.payloadNamePlaceholder || 'e.g. patch-vlan-10 or core-router-01'}
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-[#1F8A7A]"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Target filename will be saved as: <code className="font-mono text-teal-600 dark:text-teal-400">{(modalRefName.trim() || 'patch-custom').replace(/\.[^/.]+$/, '')}.txt</code>
+                    </span>
+                  </div>
+
+                  {/* Monospace Textarea */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        {t.deploy.pasteCliLabel || 'Target CLI Statements'} *
+                      </label>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        {modalPasteCli.trim() ? modalPasteCli.trim().split('\n').length : 0} lines
+                      </span>
+                    </div>
+                    <textarea
+                      rows={9}
+                      value={modalPasteCli}
+                      onChange={(e) => setModalPasteCli(e.target.value)}
+                      placeholder={t.deploy.pasteCliPlaceholder || 'Paste executable CLI commands (e.g. vlan 10 / sysname Core-01)...'}
+                      className="w-full p-3 font-mono text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-900 text-emerald-400 focus:outline-hidden focus:ring-1 focus:ring-[#1F8A7A] leading-relaxed resize-none"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/50 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsIngestModalOpen(false);
+                  setModalStagedFiles([]);
+                  setModalRefName('');
+                  setModalPasteCli('');
+                }}
+                className="px-4 py-2 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+              >
+                {t.common.cancel || 'Cancel'}
+              </button>
+
+              {ingestModalTab === 'upload' ? (
+                <button
+                  type="button"
+                  disabled={modalStagedFiles.length === 0}
+                  onClick={handleCommitStagedFiles}
+                  className="px-5 py-2 rounded-lg text-xs font-semibold bg-[#1F8A7A] hover:bg-[#176f62] text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>
+                    {modalStagedFiles.length > 0
+                      ? `Add ${modalStagedFiles.length} ${modalStagedFiles.length === 1 ? 'File' : 'Files'} to Queue`
+                      : (t.deploy.addToQueueBtn || 'Add to Queue')}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!modalPasteCli.trim()}
+                  onClick={handleCommitPasteCli}
+                  className="px-5 py-2 rounded-lg text-xs font-semibold bg-[#1F8A7A] hover:bg-[#176f62] text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{t.deploy.addToQueueBtn || 'Add to Queue'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

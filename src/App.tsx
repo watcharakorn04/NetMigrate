@@ -202,6 +202,66 @@ export default function App() {
     );
   };
 
+  const handleDeleteConversion = (idToDelete: string) => {
+    setConversions((prev) => {
+      const next = prev.filter((c) => c.id !== idToDelete);
+      if (activeConversionId === idToDelete) {
+        if (next.length > 0) {
+          setActiveConversionId(next[0].id);
+        } else {
+          setActiveConversionId('');
+        }
+      }
+      return next;
+    });
+  };
+
+  // Deployment payloads management (explicit ingestion, starts empty by default)
+  const [deployPayloads, setDeployPayloads] = useState<ConfigConversion[]>([]);
+  const [activeDeployPayloadId, setActiveDeployPayloadId] = useState<string>('');
+
+  const handleSendToDeploy = (conversion: ConfigConversion) => {
+    setDeployPayloads((prev) => {
+      const exists = prev.find((p) => p.id === conversion.id);
+      if (exists) return prev;
+      return [...prev, conversion];
+    });
+    setActiveDeployPayloadId(conversion.id);
+    setCurrentTab('deploy');
+    showToast(
+      language === 'th'
+        ? `ส่งสคริปต์ ${conversion.filename} ไปยังคิว Deploy & Test เรียบร้อยแล้ว`
+        : `Sent "${conversion.filename}" to Deploy & Test queue`
+    );
+    handleRecordAudit(
+      'SEND_TO_DEPLOY',
+      {
+        id: conversion.id,
+        filename: conversion.filename,
+        targetVendor: conversion.targetVendor,
+        linesCount: conversion.lines.length,
+      },
+      0
+    );
+  };
+
+  const handleAddDeployPayloads = (newPayloads: ConfigConversion[]) => {
+    setDeployPayloads((prev) => [...prev, ...newPayloads]);
+    if (newPayloads.length > 0) {
+      setActiveDeployPayloadId(newPayloads[0].id);
+    }
+  };
+
+  const handleDeleteDeployPayload = (idToDelete: string) => {
+    setDeployPayloads((prev) => {
+      const next = prev.filter((p) => p.id !== idToDelete);
+      if (activeDeployPayloadId === idToDelete) {
+        setActiveDeployPayloadId(next.length > 0 ? next[0].id : '');
+      }
+      return next;
+    });
+  };
+
   // Device management
   const handleAddDevice = (device: Device) => {
     setDevices((prev) => [device, ...prev]);
@@ -373,6 +433,8 @@ export default function App() {
               onSelectConversion={setActiveConversionId}
               onAddConversions={handleAddConversions}
               onUpdateConversion={handleUpdateConversion}
+              onDeleteConversion={handleDeleteConversion}
+              onSendToDeploy={handleSendToDeploy}
               language={language}
               onRecordAudit={handleRecordAudit}
             />
@@ -381,10 +443,17 @@ export default function App() {
           {currentTab === 'deploy' && (
             <DeployTestView
               devices={devices}
+              deployPayloads={deployPayloads}
+              activeDeployPayloadId={activeDeployPayloadId}
+              onSelectDeployPayload={setActiveDeployPayloadId}
+              onAddDeployPayloads={handleAddDeployPayloads}
+              onDeleteDeployPayload={handleDeleteDeployPayload}
               activeConversion={activeConversion}
               conversions={conversions}
               activeConversionId={activeConversionId}
               onSelectConversion={setActiveConversionId}
+              onAddConversions={handleAddConversions}
+              onDeleteConversion={handleDeleteConversion}
               language={language}
               onRecordAudit={handleRecordAudit}
             />
